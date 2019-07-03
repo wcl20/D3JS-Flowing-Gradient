@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang = "en">
+<head>
+    <style>
+        body { margin: 0; }
+        svg { width: 100vw; height: 100vh;}
+    </style>
+</head>
+<body>
+    <svg></svg>
+    <script src="js/d3.min.js"></script>
+    <script src="js/d3-sankey.js"></script>
+    <script>
+        const svg = d3.select("svg");
+        
+        // Get actual width and height of svg element
+        const svgWidth = svg.node().getBoundingClientRect().width;
+        const svgHeight = svg.node().getBoundingClientRect().height;
+
+        const margin = 100;
+        const width = svgWidth - 2 * margin;
+        const height = svgHeight - 2 * margin;
+
+        // Create canvas
+        const chart = svg.append("g").attr("transform", `translate(${margin}, ${margin})`);
+
+        /************************************************************************************
+        * Data
+        ************************************************************************************/
+        /*
+         * Create random data
+         * To use the Sankey.js library, data must consists of nodes and links
+         * nodes should be a list of { node: 1 }, { node: 2 } ...
+         * links should be a list of { source: 1, target: 2, value: 10 } ...
+         */ 
+        
+        const numSources = 4, numTargets = 4, numLinks = 20;
+        const linkData = [];
+        for(let i = 0; i < numLinks; i++) {
+            // d3.randomUniform() returns a function to generate a random number
+            let source = Math.floor(d3.randomUniform(numSources)());
+            let target = Math.floor(d3.randomUniform(numSources, numSources + numTargets)());
+            let found = linkData.find(link => link.source === source && link.target === target);
+            if(found === undefined) linkData.push({ source: source, target: target, value: Math.random() * 100 });
+        }
+        const nodesData = [];
+        d3.range(numSources + numTargets).forEach(n => nodesData.push({ node: n }));
+        const data = { nodes: nodesData, links: linkData };
+        console.log(data);
+        
+        // Create same color schemes for sources and targets
+        let colors = ["#E3746D", "#B790F7", "#38C4B4", "#FFF06F", "#E3746D", "#B790F7", "#38C4B4", "#FFF06F"];
+        const colorScale = d3.scaleOrdinal().domain(d3.range(numSources + numTargets)).range(colors);
+
+        /************************************************************************************
+        * Color Gradient
+        ************************************************************************************/
+        const defs = svg.append("defs");
+        const linearGradients = defs.selectAll().data(data.links).enter().append("linearGradient");
+        linearGradients
+            .attr("gradientUnits", "userSpaceOnUse")
+            .merge(linearGradients)
+            .attr("id", d => `gradient-${d.source}-${d.target}`)
+            .attr("x1", d => d.source.x)
+            .attr("y1", d => d.source.y)
+            .attr("x2", d => d.target.x)
+            .attr("y1", d => d.target.y)
+            .attr("spreadMethod", "reflect");
+        linearGradients.append("stop").attr("offset", "0%").attr("stop-color", d => colorScale(d.source));
+        linearGradients.append("stop").attr("offset", "50%").attr("stop-color", d => colorScale(d.target));   
+        linearGradients.exit().remove();
+        
+        /************************************************************************************
+        * Sankey
+        ************************************************************************************/
+        // Create sankey generator
+        const sankeyGenerator = d3.sankey()
+            .nodeWidth(30)
+            .nodePadding(0) // The height distance between each node
+            .size([width, height]);
+        /*
+         * Layout is the number of iterations an algorithm runs to prevent
+         * nodes from overlapping.
+         * The higher number, the better the placment but takes longer tme
+         */ 
+        sankeyGenerator.nodes(data.nodes).links(data.links).layout(30);
+
+        // Sankey Links
+        const links = chart.selectAll("path").data(data.links).enter().append("path");
+        links.merge(links)
+            .attr("d", sankeyGenerator.link())
+            .style("fill", "none")
+            .style("stroke-opacity", 0.8).style("stroke-width", d => Math.max(1, d.dy))
+            .style("stroke", d => `url(#gradient-${d.source.node}-${d.target.node})`)
+            .sort((a, b) => b.dy - a.dy) // Use to decide which path is drawn first when there is overlapping
+            .on("mouseover", function(selectedPath) {
+                // Dim all other paths and focus on selected path
+                chart.selectAll("path").style("stroke-opacity", 0.1);
+                d3.select(this).style("stroke-opacity", 1);
+
+                // Create graident flow
+                let source = selectedPath.source.node;
+                let target = selectedPath.target.node;
+                // If start and end color are different ...
+                if(colorScale(source) !== colorScale(target)) {
+                    // ... animate a gradient flow
+                    let linearGradient = d3.select(`#gradient-${source}-${target}`);
+                    linearGradient.append("animate")
+                        .attr("attributeName","x1")
+                        .attr("values","0%;200%")
+                        .attr("dur","3s")
+                        .attr("repeatCount","indefinite");
+                    linearGradient.append("animate")
+                        .attr("attributeName","x2")
+                        .attr("values","100%;300%")
+                        .attr("dur","3s")
+                        .attr("repeatCount","indefinite");
+                    linearGradient.append("animate")
+                        .attr("attributeName","y1")
+                        .attr("values","0%;200%")
+                        .attr("dur","3s")
+                        .attr("repeatCount","indefinite");
+                    linearGradient.append("animate")
+                        .attr("attributeName","y2")
+                        .attr("values","100%;300%")
+                        .attr("dur","3s")
+                        .attr("repeatCount","indefinite");
+                }
+            })
+            .on("mouseout", function(selectedPath) {
+                // Show all the paths
+                chart.selectAll("path").style("stroke-opacity", 0.8);
+
+                // Remove all gradient flow
+                let source = selectedPath.source.node;
+                let target = selectedPath.target.node;
+                d3.select(`#gradient-${source}-${target}`).selectAll("animate").remove();
+            })
+        links.exit().remove();
+
+        // Sankey nodes
+        const nodes = chart.selectAll(".node").data(data.nodes);     
+        nodes.enter()
+            .append("g").attr("class", "node")
+            .merge(nodes)
+            .attr("transform", d => `translate(${d.x}, ${d.y})`)
+            // Add drag functionality to node
+            .call(d3.drag().subject(d => d) 
+                .on("start", function() { this.parentNode.appendChild(this); })
+                .on("drag", function(d) {
+                    // Move node to new x, y position
+                    let x = Math.max(0, Math.min(width - d.dx, d3.event.x));
+                    let y = Math.max(0, Math.min(height - d.dy, d3.event.y));
+                    d3.select(this).attr("transform", `translate(${d.x = x}, ${d.y = y})`);
+
+                    // Update paths
+                    sankeyGenerator.relayout();
+                    links.attr("d", sankeyGenerator.link());
+                })
+            )
+            .append("rect")
+            .attr("height", d => d.dy)
+            .attr("width", sankeyGenerator.nodeWidth())
+            .style("fill", d => colorScale(d.node))    
+        nodes.exit().remove();
+    </script>
+</body>
+</html>
